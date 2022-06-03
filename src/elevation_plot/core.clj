@@ -162,7 +162,7 @@
 (defn get-nearest-points-easy
   "For a given arbitrary point described by `x` `y` in a list or vector,
    get the 4 nearest points found in `map-data`"
-  [map-data [x y]]
+  [[x y] map-data]
   (->> map-data
        (sort-by #(q/dist x y (first %) (second %)))
        (take 4)))
@@ -191,7 +191,10 @@
   [grid data]
   (let [near-points (for [point grid]
                       (get-nearest-points-easy point data))]
-    (map interpolate-point-alt grid near-points)))
+    (map (fn [[x y _ :as point] coll]
+           [x y (interpolate-point-alt point coll)])
+         grid
+         near-points)))
 
 
 (comment
@@ -221,7 +224,8 @@
     (pp/pprint (scale-map-data crud))
     (get-nearest-points-goofy [22 30 0] crud)
     (def crap-grid (point-grid 10 10 100 100 20))
-    (sp/transform [ALL-Z] (interp-grid crap-grid crud))))
+    (interp-grid crap-grid crud))
+    )
 
 
 ;;; "Main"
@@ -238,6 +242,9 @@
 (def scaled-grid (point-grid window-x-min window-y-min
                              window-x-max window-y-max
                              grid-resolution))
+
+(def interpolated-grid (interp-grid scaled-grid scaled-data))
+
 
 ;;; Named colors in HSB( 360 100 100 1.0 )
 (def colors {:black [0 0 0]
@@ -266,12 +273,8 @@
             (q/stroke (q/map-range z z-min z-max (get-hue :blue) (get-hue :red))
                       100 100)
             (q/point x y))
-          scaled-data)))
-
-  (apply q/stroke (:blue colors))
-  ;; (doall
-  ;;  (map (fn [[x y]] (q/point x y))
-  ;;       scaled-grid))
+          #_scaled-data
+          interpolated-grid)))
 
   (q/no-loop))
 
