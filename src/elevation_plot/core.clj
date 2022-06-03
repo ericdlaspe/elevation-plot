@@ -74,7 +74,7 @@
         (* 1.175 (q/cos (* 4 phi)))
         (* -0.0023 (q/cos (* 6 phi)))))))
 
-(def m-per-deg-long
+(def m-per-deg-lon
   "Returns the number of meters in one degree of longitude at the longitude
    angle `phi` on the WGS84 spheroid. This calculation is correct to within
    one centimeter according to
@@ -95,56 +95,133 @@
         ys (range y1 y2 resolution)]
     (vec (for [x xs
                y ys]
-           (vector x y 0)))))
+           [x y 0]))))
 
-(def X-VALS (sp/path sp/ALL sp/FIRST))
-(def Y-VALS (sp/path sp/ALL sp/nthpath 1))
-(def Z-VALS (sp/path sp/ALL sp/LAST))
+(def ALL-X (sp/path sp/ALL sp/FIRST))
+(def ALL-Y (sp/path sp/ALL sp/nthpath 1))
+(def ALL-Z (sp/path sp/ALL sp/LAST))
 
-(defn get-min-x [points] (apply min (sp/select [X-VALS] points)))
-(defn get-max-x [points] (apply max (sp/select [X-VALS] points)))
-(defn get-min-y [points] (apply min (sp/select [Y-VALS] points)))
-(defn get-max-y [points] (apply max (sp/select [Y-VALS] points)))
-(defn get-min-z [points] (apply min (sp/select [Z-VALS] points)))
-(defn get-max-z [points] (apply max (sp/select [Z-VALS] points)))
+(defn get-stat [stat path points] (apply stat (sp/select [path] points)))
 
 (def window-x-min spad)
 (def window-x-max (- swidth spad))
 (def window-y-min spad)
 (def window-y-max (- sheight spad))
 
+(defn project-WGS84->meters
+  "Project WGS84 data input as vector tuples for each point like:
+   [lat-degrees lon-degrees alt-meters] and transform them to offsets in meters
+   relative to the west-most and north-most coordinates in the data, which will
+   be set to [0 0]. Altitudes, which are assumed to be in meters already, will
+   be unchanged."
+   [points]
+  (let [lat-min (get-stat min ALL-X points)
+        lat-max (get-stat max ALL-X points)
+        lon-min (get-stat min ALL-Y points)
+        lon-max (get-stat max ALL-Y points)
+        ;; Get meters per degree of lat and lon for the center of the data
+        mid-m-per-deg-lat (m-per-deg-lat (/ (+ lat-min lat-max) 2))
+        mid-m-per-deg-lon (m-per-deg-lon (/ (+ lon-min lon-max) 2))]
+    (map (fn [[lat lon alt]]
+           [(* mid-m-per-deg-lat (- lat lat-min))
+            (* mid-m-per-deg-lon (- lon lon-min))
+            alt])
+         points)))
+
+
 (defn scale-map-data
   "Scale points to fit within the sketch window."
   [points]
-  (let [lat-min (get-min-x points)
-        lat-max (get-max-x points)
-        lon-min (get-min-y points)
-        lon-max (get-max-y points)]
-    (sp/transform [sp/ALL]
-                  (fn [[lat lon alt]]
-                    [(q/map-range lat lat-min lat-max window-x-min window-x-max)
-                     (q/map-range lon lon-min lon-max window-y-min window-y-max)
-                     alt])
-                  points)))
+  (let [lat-min (get-stat min ALL-X points)
+        lat-max (get-stat max ALL-X points)
+        lon-min (get-stat min ALL-Y points)
+        lon-max (get-stat max ALL-Y points)]
+    (map (fn [[lat lon alt]]
+           ;; Map lat and lon ranges in reverse because N latitude
+           ;; and W longitude increase in the directions opposite
+           ;; of the Quil sketch window. Also, map lat -> y and lon -> x.
+           [(q/map-range lon lon-min lon-max window-y-max window-y-min)
+            (q/map-range lat lat-min lat-max window-x-max window-x-min)
+            alt])
+         points)))
+
+(defn dist-1d [a b] (Math/abs (- a b)))
+
+(defn get-nearest-points-goofy
+  [[x y _] map-data]
+  (let [closest-x (->> map-data
+                       (sort-by #(dist-1d x ))
+                       (take 3)
+                       set) ; Set of points with closest x coord
+        closest (->> map-data
+                     (sort-by second #(< (dist-1d y %1) (dist-1d y %2)))
+                     (take 3)
+                     (into closest-x))] ; Combined with set of closest y coord
+    closest))
+
+(defn get-nearest-points-easy
+  "For a given arbitrary point described by `x` `y` in a list or vector,
+   get the 4 nearest points found in `map-data`"
+  [map-data [x y]]
+  (->> map-data
+       (sort-by #(q/dist x y (first %) (second %)))
+       (take 4)))
+
+(defn interpolate-point-alt
+  "Given a list/vector of `nearest-points` with altitudes, interpolate
+   the altitude for the given `point`. Returns a single altitude value."
+  [point nearest-points]
+  (let [[x y]       point
+        dists       (map (fn [[xn yn]]
+                           (q/dist x y xn yn))
+                         nearest-points)
+        sum-dists   (apply + dists)
+        ;; The start and stop values are swapped for getting normalized
+        ;; distances so that closer points are weighted more heavily.
+        weights     (map #(q/norm % sum-dists 0) dists)
+        sum-weights (apply + weights)]
+    #_(println "dists:" dists "sum:" sum-dists "\nweights:" weights "sum:" sum-weights)
+    ;; Weighted mean
+    (/ (apply + (map (fn [weight altitude] (* weight altitude))
+                     weights
+                     (sp/select [ALL-Z] nearest-points)))
+       sum-weights)))
+
+(defn interp-grid
+  [grid data]
+  (let [near-points (for [point grid]
+                      (get-nearest-points-easy point data))]
+    (map interpolate-point-alt grid near-points)))
+
 
 (comment
-  (def crud [[10 10 1]
-             [10 -20 1]
-             [10 30 1]
-             [10 40 210]
-             [10 50 1]
-             [20 10 1]
-             [-2 20 1]
-             [3 10 1]
-             [50 10 1]
-             [50 100 1]
-             [50 30 1]
-             [50 40 1]
-             [50 50 1]])
-  (apply printf "min x: %d  max x: %d  min y: %d  max y: %d  min z: %d  max z: %d"
-         ((juxt min-x max-x min-y max-y min-z max-z) crud))
-  (pp/pprint (scale-map-data crud))
-  )
+  (q/dist 3 2 10 15)
+  (q/dist 10 15 3 2))
+
+(comment
+  (do
+    (def crud [[10 10 1]
+               [10 -20 1]
+               [10 30 1]
+               [10 40 50]
+               [10 50 30]
+               [20 10 10]
+               [19 29 0]
+               [-2 20 0]
+               [3 10 1]
+               [50 10 5]
+               [50 100 12]
+               [50 30 20]
+               [50 40 1]
+               [50 50 1]])
+    (reduce + (map first crud))
+    (apply printf "min x: %d  max x: %d\nmin y: %d  max y: %d\nmin z: %d  max z: %d"
+           ((juxt min-x max-x min-y max-y min-z max-z) crud))
+    (println)
+    (pp/pprint (scale-map-data crud))
+    (get-nearest-points-goofy [22 30 0] crud)
+    (def crap-grid (point-grid 10 10 100 100 20))
+    (sp/transform [ALL-Z] (interp-grid crap-grid crud))))
 
 
 ;;; "Main"
@@ -154,6 +231,7 @@
                       clean-csv-data
                       drop-header-row
                       csv-strings->numbers
+                      project-WGS84->meters
                       scale-map-data))
 
 (def grid-resolution 5)
@@ -179,10 +257,10 @@
 
 (defn draw []
   (q/smooth 4)
-  (q/background 255)
+  (q/background 0)
   (q/stroke-weight 3)
-  (let [z-min (get-min-z scaled-data)
-        z-max (get-max-z scaled-data)]
+  (let [z-min (get-stat min [ALL-Z] scaled-data)
+        z-max (get-stat max [ALL-Z] scaled-data)]
     (doall
      (map (fn [[x y z]]
             (q/stroke (q/map-range z z-min z-max (get-hue :blue) (get-hue :red))
@@ -190,10 +268,10 @@
             (q/point x y))
           scaled-data)))
 
-  #_(apply q/stroke (:blue colors))
-  #_(doall
-   (map (fn [[x y]] (q/point x y))
-        scaled-grid))
+  (apply q/stroke (:blue colors))
+  ;; (doall
+  ;;  (map (fn [[x y]] (q/point x y))
+  ;;       scaled-grid))
 
   (q/no-loop))
 
