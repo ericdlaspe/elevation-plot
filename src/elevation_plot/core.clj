@@ -212,7 +212,7 @@
                [50 10 5]
                [50 100 12]
                [50 30 20]
-               [50 40 1]
+               [50 40 2]
                [50 50 1]])
     (reduce + (map first crud))
     (apply printf "min x: %d  max x: %d\nmin y: %d  max y: %d\nmin z: %d  max z: %d"
