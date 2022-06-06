@@ -144,24 +144,39 @@
 (defn get-nearest-points-goofy
   [[x y _] map-data]
   (let [closest-x (->> map-data
-                       (sort-by #(dist-1d x ))
+                       (sort-by first #(< (dist-1d x %1) (dist-1d x %2)))
                        (take 3)
-                       set) ; Set of points with closest x coord
-        closest (->> map-data
-                     (sort-by second #(< (dist-1d y %1) (dist-1d y %2)))
-                     (take 3)
-                     (into closest-x))] ; Combined with set of closest y coord
-    closest))
+                       set)] ; Set of points with closest x coord
+    (lazy-seq (->> map-data
+                   (sort-by second #(< (dist-1d y %1) (dist-1d y %2)))
+                   (take 3)
+                   (into closest-x))))) ; Combined with set of closest y coords
 
 (defn get-nearest-points-easy
   "For a given arbitrary point described by `x` `y` in a list or vector,
    get the 4 nearest points found in `map-data`"
   [[x y] map-data]
-  (->> map-data
-       (sort-by #(q/dist x y (first %) (second %)))
-       (take 4)))
+  (lazy-seq (->> map-data
+                 (sort-by #(q/dist x y (first %) (second %)))
+                 (take 4))))
 
-(defn interpolate-point-alt
+(defn point-within-square-dist?
+  "Return true if the two given points are within the square defined by length
+   `dist`"
+  [[x1 y1] [x2 y2] dist]
+    (and (< (dist-1d x1 x2) dist)
+         (< (dist-1d y1 y2) dist)))
+
+(defn get-nearest-points-faster
+  "For a given arbitrary point described by `x` `y` in a list or vector,
+   get at minimum the nearest 3 points found in `map-data`"
+  [point dist map-data]
+  (let [points (filter #(point-within-square-dist? point % dist) map-data)]
+    (if (> (count points) 3)
+      points
+      (recur point (* 2 dist) map-data))))
+
+(defn interpolate-altitude
   "Given a list/vector of `nearest-points` with altitudes, interpolate
    the altitude for the given `point`. Returns a single altitude value."
   [point nearest-points]
@@ -182,11 +197,14 @@
        sum-weights)))
 
 (defn interp-grid
-  [grid data]
+  "For each point in the `grid` coll, scan for points in the `data` coll within
+   `dist`, representing a square search aread around the grid point. Use the
+   discovered points to interpolate an alititude for the grid point."
+  [dist grid data]
   (let [near-points (for [point grid]
-                      (get-nearest-points-easy point data))]
+                      (get-nearest-points-faster point 10 data))]
     (map (fn [[x y _ :as point] coll]
-           [x y (interpolate-point-alt point coll)])
+           [x y (interpolate-altitude point coll)])
          grid
          near-points)))
 
