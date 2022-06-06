@@ -102,6 +102,9 @@
 (def window-x-max (- swidth spad))
 (def window-y-min spad)
 (def window-y-max (- sheight spad))
+(def get-min (partial get-stat min))
+(def get-max (partial get-stat max))
+
 
 (defn project-WGS84->meters
   "Project WGS84 data input as vector tuples for each point like:
@@ -110,10 +113,10 @@
    be set to [0 0]. Altitudes, which are assumed to be in meters already, will
    be unchanged."
    [points]
-  (let [lat-min (get-stat min ALL-X points)
-        lat-max (get-stat max ALL-X points)
-        lon-min (get-stat min ALL-Y points)
-        lon-max (get-stat max ALL-Y points)
+  (let [lat-min (get-min ALL-X points)
+        lat-max (get-max ALL-X points)
+        lon-min (get-min ALL-Y points)
+        lon-max (get-max ALL-Y points)
         ;; Get meters per degree of lat and lon for the center of the data
         mid-m-per-deg-lat (m-per-deg-lat (/ (+ lat-min lat-max) 2))
         mid-m-per-deg-lon (m-per-deg-lon (/ (+ lon-min lon-max) 2))]
@@ -126,11 +129,10 @@
 
 (defn scale-map-data
   "Scale points to fit within the sketch window."
-  [points]
-  (let [lat-min (get-stat min ALL-X points)
-        lat-max (get-stat max ALL-X points)
-        lon-min (get-stat min ALL-Y points)
-        lon-max (get-stat max ALL-Y points)]
+  (let [lat-min (get-min ALL-X points)
+        lat-max (get-max ALL-X points)
+        lon-min (get-min ALL-Y points)
+        lon-max (get-max ALL-Y points)]
     (map (fn [[lat lon alt]]
            ;; Map lat and lon ranges in reverse because N latitude
            ;; and W longitude increase in the directions opposite
