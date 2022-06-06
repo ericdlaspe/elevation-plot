@@ -98,10 +98,6 @@
 
 (defn get-stat [stat path points] (apply stat (sp/select [path] points)))
 
-(def window-x-min spad)
-(def window-x-max (- swidth spad))
-(def window-y-min spad)
-(def window-y-max (- sheight spad))
 (def get-min (partial get-stat min))
 (def get-max (partial get-stat max))
 
@@ -129,6 +125,7 @@
 
 (defn scale-map-data
   "Scale points to fit within the sketch window."
+  [window-x-min window-x-max window-y-min window-y-max points]
   (let [lat-min (get-min ALL-X points)
         lat-max (get-max ALL-X points)
         lon-min (get-min ALL-Y points)
@@ -137,8 +134,8 @@
            ;; Map lat and lon ranges in reverse because N latitude
            ;; and W longitude increase in the directions opposite
            ;; of the Quil sketch window. Also, map lat -> y and lon -> x.
-           [(q/map-range lon lon-min lon-max window-y-max window-y-min)
-            (q/map-range lat lat-min lat-max window-x-max window-x-min)
+           [(q/map-range lon lon-min lon-max window-x-max window-x-min)
+            (q/map-range lat lat-min lat-max window-y-max window-y-min)
             alt])
          points)))
 
@@ -224,23 +221,56 @@
     (interp-grid crap-grid crud))
     )
 
+(defn get-data-proportion
+  "Width/height"
+  [map-data]
+  (/ (- (get-max ALL-X map-data) (get-min ALL-X map-data))
+     (- (get-max ALL-Y map-data) (get-min ALL-Y map-data))))
 
-;;; "Main"
+
+;;; Import CSV data
 (def data (load-csv "/Users/easy/Downloads/20220519082008-04213-data.csv"))
 
-(def scaled-data (->> data
-                      clean-csv-data
-                      drop-header-row
-                      csv-strings->numbers
-                      project-WGS84->meters
-                      scale-map-data))
+(def imported-meters-data (->> data
+                               clean-csv-data
+                               drop-header-row
+                               csv-strings->numbers
+                               project-WGS84->meters))
+
+
+;;; Sketch parameters
+(def swidth 800)
+;; Scale the sketch according to the proportions of the map data
+(def proportion (get-data-proportion imported-meters-data))
+(def sheight (* swidth proportion))
+
+;; Set window parameters with padding so points are not drawn along the edges
+(def spad 10)
+(def window-x-min spad)
+(def window-x-max (- swidth spad))
+(def window-y-min spad)
+(def window-y-max (- sheight spad))
+
+;; Number of grid pixels to interpolate/render across each dimension
+(def px-count 100)
+;; Resulting size of each grid pixel
+(def px-width (double (/ (- window-x-max window-x-min) px-count)))
+(def px-height (double (/ (- window-y-max window-y-min) px-count)))
+
+
+;; Scale the map data
+(def scaled-data (scale-map-data window-x-min window-x-max window-y-min
+                                 window-y-max imported-meters-data))
 
 (def grid-resolution 5)
 (def scaled-grid (point-grid window-x-min window-y-min
                              window-x-max window-y-max
                              grid-resolution))
 
-(def interpolated-grid (interp-grid scaled-grid scaled-data))
+;; Set the size of the square box within which interp-grid will search for
+;; neighboring points
+(def initial-distance)
+(def interpolated-grid (interp-grid initial-distance scaled-grid scaled-data))
 
 
 ;;; Named colors in HSB( 360 100 100 1.0 )
@@ -262,14 +292,15 @@
 (defn draw []
   (q/smooth 4)
   (q/background 0)
-  (q/stroke-weight 3)
-  (let [z-min (get-stat min [ALL-Z] scaled-data)
-        z-max (get-stat max [ALL-Z] scaled-data)]
+  (q/no-stroke)
+  (q/rect-mode :center)
+  (let [z-min (get-min [ALL-Z] scaled-data)
+        z-max (get-max [ALL-Z] scaled-data)]
     (doall
      (map (fn [[x y z]]
-            (q/stroke (q/map-range z z-min z-max (get-hue :blue) (get-hue :red))
-                      100 100)
-            (q/point x y))
+            (q/fill (q/map-range z z-min z-max (get-hue :blue) (get-hue :red))
+                    100 100)
+            (q/rect x y px-width px-height))
           #_scaled-data
           interpolated-grid)))
 
