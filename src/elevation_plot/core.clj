@@ -3,16 +3,11 @@
   (:require [taoensso.truss :as truss :refer (have have! have?)]
             [clojure.data.csv :as csv]
             [clojure.java.io :as io]
-            [clojure.math.numeric-tower :as m]
+            ;; [clojure.math.numeric-tower :as m]
             [clojure.pprint :as pp]
             [quil.core :as q]
-            [quil.middleware :as qm]
+            ;; [quil.middleware :as qm]
             [com.rpl.specter :as sp]))
-
-;;; Sketch parameters
-(def sheight 800)
-(def swidth 800)
-(def spad 10)
 
 
 (defn row-data-good?
