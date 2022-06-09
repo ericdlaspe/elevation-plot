@@ -7,6 +7,7 @@
                  [org.clojure/clojure "1.10.3"]
                  [org.clojure/data.csv "1.0.1"]
                  [org.clojure/math.numeric-tower "0.0.5"]
+                 [org.clojure/tools.trace "0.7.11"]
                  [quil "3.1.0"]
                  [com.rpl/specter "1.1.4"]]
   :main ^:skip-aot elevation-plot.core
