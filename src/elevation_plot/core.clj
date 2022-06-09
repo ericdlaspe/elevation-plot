@@ -24,7 +24,7 @@
   [z z-min z-max]
   (if (<= z-min z z-max)
     [(q/map-range z z-min z-max (get-hue :blue) (get-hue :red)) 100 100]  ; z is not nil
-    (:black colors)))  ; z is nil or 0
+    (:black colors)))  ; z is outside the expected data range
 
 (defn row-data-good?
   "Returns true if every item in the `row` is a non-empty string;
@@ -183,6 +183,8 @@
       (q/stroke-weight 5))
     (apply q/stroke color)
     (q/point x y)))
+
+;; (defn )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -370,7 +372,7 @@
 ;; (def interpolated-grid (interp-grid scaled-grid scaled-data))
 
 
-;; Create a flat, 2D vector with all values initialized to nil
+;; Create a flat, 2D vector with all values initialized to NaN
 (def empty-grid
   (point-grid-flat pwidth pheight))
 (println "Total point count:\n" (count empty-grid))
