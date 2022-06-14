@@ -7,7 +7,15 @@
    [clojure.math.numeric-tower :as m]
    [clojure.tools.trace :as tr]
    [com.rpl.specter :as sp]
-   [quil.core :as q]))
+   [quil.core :as q]
+   ))
+
+(def csv-path "/Users/easy/Downloads/20220519082008-04213-data.csv")
+
+(def width 500)
+(def height width)
+(def pad 10)
+(def global-state (atom {}))
 
 ;;; Named colors in HSB( 360 100 100 1.0 )
 (def colors {:black [0 0 0]
@@ -146,6 +154,7 @@
   "Copy data points from nested vector `data` (e.g. [[x1 y1 z1] [x2 y2 z2] ...])
    to flat, n-by-m vector `grid` (e.g. [z1 z2 z3 ...])"
   [grid n data]
+  ;;; FIXME: Sort data by x and y vals before copying into flat grid
 
   ; Unpack first row values
   (let [[x y z] (first data)]
@@ -156,7 +165,7 @@
       ; Return the resultant grid
       grid
 
-      ; Else recur (call the loop with new values)
+      ; Else recur
       (recur (set-val-flat grid n x y z) n (rest data)))))
 
 (comment
@@ -170,21 +179,20 @@
   )
 
 (defn draw-grid-flat
-  "Draw the grid using Quil library functions"
+  "Draw the n-by-m `grid` using Quil library functions. m does not need to be
+   supplied. It is implied to be the vector's size divided by `n`."
   [grid n z-min z-max]
-  (println "z-min:" z-min)
-  (println "z-max:" z-max)
+  (have? pos? n)
+  (q/stroke-weight 4)
   (doseq [x (range n)
           y (range (/ (count grid) n))
           :let [v (get-val-flat grid n x y)
                 color (z-height->hue-rainbow v z-min z-max)]]
-    (if (= color (:black colors))
-      (q/stroke-weight 0)
-      (q/stroke-weight 5))
     (apply q/stroke color)
-    (q/point x y)))
+    (when-not (= color (:black colors))
+      (q/point x y))))
 
-;; (defn )
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -198,7 +206,7 @@
 (def get-max (partial get-stat max))
 
 
-(defn project-WGS84->meters
+(defn project-wgs84->meters
   "Project WGS84 data input as vector tuples for each point like:
    [lat-degrees lon-degrees alt-meters] and transform them to offsets in meters
    relative to the west-most and north-most coordinates in the data, which will
@@ -209,9 +217,15 @@
         lat-max (get-max ALL-X points)
         lon-min (get-min ALL-Y points)
         lon-max (get-max ALL-Y points)
-        ;; Get meters per degree of lat and lon for the center of the data
+        ;; Get meters per degree of lat and lon for the center of the data.
+        ;; For a mapped area of a few miles or less, this should provide
+        ;; a close enough approximation. If greater accuracy is needed,
+        ;; we could later switch to calculating the m-per-deg-lat between each
+        ;; two points.
         mid-m-per-deg-lat (m-per-deg-lat (/ (+ lat-min lat-max) 2))
         mid-m-per-deg-lon (m-per-deg-lon (/ (+ lon-min lon-max) 2))]
+    ;; FIXME: Consider a more memory-efficient way of building this vector. Reduce?
+    ;; FIXME: Build a vector instead of a list.
     (map (fn scale-data [[lat lon alt]]
            [(* mid-m-per-deg-lat (- lat lat-min))
             (* mid-m-per-deg-lon (- lon lon-min))
@@ -230,8 +244,8 @@
            ;; Map lat and lon ranges in reverse because N latitude
            ;; and W longitude increase in the directions opposite
            ;; of the Quil sketch window. Also, map lat -> y and lon -> x.
-           [(q/map-range lon lon-min lon-max x-max 0)
-            (q/map-range lat lat-min lat-max y-max 0)
+           [(q/map-range lon lon-min lon-max (dec x-max) 0)
+            (q/map-range lat lat-min lat-max (dec y-max) 0)
             alt])
          points)))
 
@@ -277,7 +291,7 @@
 
 (defn round-data-points
   "Run a rounding function on each row of the 2D list supplied in `coll`"
-  [coll] (map round-row coll))
+  [coll] (mapv round-row coll))
 
 ;; (defn interpolate-distance)
 
@@ -323,83 +337,42 @@
   (/ (- (get-max ALL-X map-data) (get-min ALL-X map-data))
      (- (get-max ALL-Y map-data) (get-min ALL-Y map-data))))
 
+(defn get-sketch-dimensions
+  "Scale the sketch parameters according to the proportions of the map data."
+  [meters-data]
+  ;; Set window parameters with padding so points are not drawn along the edges
+  (let [proportion (get-data-proportion meters-data)
+        pwidth (- width (* 2 pad))
+        pheight (- (m/round (* width proportion))
+                   (* 2 pad))]
+
+    ;; Check that the sketch proportions will fit within the window
+    (have? (and (> width pwidth) (> height pheight)))
+
+    ;; Return the sketch proportions
+    {:pwidth pwidth
+     :pheight pheight}))
+
+(defn get-altitude-extents
+  "Return the minimum and maximum altitude in the vector, which may contain 
+   ##NaN values."
+  [coll]
+  (let [data (filter #(not (Float/isNaN %)) coll)]
+    {:z-min (apply min data)
+     :z-max (apply max data)}))
 
 
-;;; Import CSV data
-(def data (load-csv "/Users/easy/Downloads/20220519082008-04213-data.csv"))
-
-(def imported-meters-data (->> data
-                               clean-csv-data
-                               drop-header-row
-                               csv-strings->numbers
-                               project-WGS84->meters))
-(println "Imported point count:\n" (count imported-meters-data))
-
-;;; Sketch parameters
-(def swidth 700)
-;; Scale the sketch according to the proportions of the map data
-(def proportion (get-data-proportion imported-meters-data))
-(def sheight (m/round (* swidth proportion)))
-
-;; Set window parameters with padding so points are not drawn along the edges
-(def spad 10)
-(def pwidth (- swidth spad spad))
-(def pheight (- sheight spad spad))
-
-
-
-;; ;; Number of grid pixels to interpolate/render across each dimension
-;; (def px-count 100)
-;; ;; Resulting size of each grid pixel
-;; (def px-width (double (/ (- window-x-max window-x-min) px-count)))
-;; (def px-height (double (/ (- window-y-max window-y-min) px-count)))
-
-;; Scale the map data
-(def scaled-data
-  (round-data-points
-   (scale-map-data (dec pwidth) (dec pheight) imported-meters-data)))
-(println "Scaled point count:\n" (count scaled-data))
-
-(def z-min (get-min ALL-Z scaled-data))
-(def z-max (get-max ALL-Z scaled-data))
-
-;; (def grid-resolution 4)
-;; (def scaled-grid (point-grid window-x-min window-y-min
-;;                                window-x-max window-y-max
-;;                                grid-resolution))
-;; ;; Set the size of the square box within which interp-grid will search for
-;; ;; neighboring points
-;; (def interpolated-grid (interp-grid scaled-grid scaled-data))
-
-
-;; Create a flat, 2D vector with all values initialized to NaN
-(def empty-grid
-  (point-grid-flat pwidth pheight))
-(println "Total point count:\n" (count empty-grid))
-
-(have? #(every? number? %) empty-grid)
-(take 5 empty-grid)
-
-(comment
-  (have? #(every? number? %) [2 3 4])
-  (have? #(every? number? %) [2 3 4 [2 3]])
-  )
-
-;; X dimension of 2D vector
-(def n-dim pwidth)
-
-;; Copy the sparse grid data into the empty grid
-(def data-grid
-  (copy-data-to-grid empty-grid n-dim scaled-data))
-(println "Non-zero point count:\n" (count (filter #(not (zero? %)) data-grid)))
-
-(have? #(every? number? %) data-grid)
-
-;; (prn data-grid)
-
-
-
-
+(defn import-wgs84-data
+  "Import WGS84 GIS data points from a CSV with rows formatted as
+   latitude, longitude, altitude (m)
+   where latitude and longitude are in decimal degrees.
+   The output is a vector of vectors, (e.g.
+   [39.661031139,-84.025190726,276.5])"
+  [file-path]
+  (->> (load-csv file-path)
+       clean-csv-data
+       drop-header-row
+       csv-strings->numbers))
 
 
 
@@ -407,36 +380,79 @@
   (q/color-mode :hsb 360 100 100 1.0))
 
 (defn settings []
-  (q/pixel-density 2))
+  (q/pixel-density 2)
+  (q/smooth))
 
 (defn draw []
-  (q/background 0)
+  (apply q/background (:black colors))
 
-  (q/rect-mode :center)
-  (q/translate spad spad)
-  (draw-grid-flat data-grid n-dim z-min z-max)
-
-  ;; (q/stroke-weight 5)
-  ;; (apply q/stroke (z-height->hue-rainbow 265 z-min z-max))
-  ;; (q/point 100 100)
+  (let [{data-grid :data-grid, n-dim :pwidth,
+         z-min :z-min, z-max :z-max} @global-state]
+    (q/translate pad pad)
+    (draw-grid-flat data-grid n-dim z-min z-max))
 
   (q/no-loop))
 
-(q/defsketch grid-thing
-  :size [swidth sheight]
-  ;; :renderer :p3d
-  :settings settings
-  :setup setup
-  :draw draw
-  :features [:keep-on-top])
 
 
+(comment
+  (do
+    (def imported-meters-data (->> (import-wgs84-data csv-path)
+                                   project-wgs84->meters))
+    (def pwidth (:pwidth (get-sketch-dimensions imported-meters-data)))
+    (def pheight (:pheight (get-sketch-dimensions imported-meters-data)))
+    (def scaled-meters-data (->> imported-meters-data
+                                 (scale-map-data pwidth pheight)
+                                 round-data-points))
+    (count scaled-meters-data)
+    (get-min ALL-X scaled-meters-data)
+    (get-max ALL-X scaled-meters-data)
+    (get-min ALL-Y scaled-meters-data)
+    (get-max ALL-Y scaled-meters-data)
 
+    (def grid (point-grid-flat pwidth pheight))
+    (count grid)
+    (def data-grid (copy-data-to-grid grid pwidth scaled-meters-data))
+    (filter #(not (Float/isNaN %)) data-grid)
+    (def extents (get-altitude-extents data-grid)))
 
+  extents
 
-;; (defn -main
-;;   "Read a CSV, massage the data, interpolate some points, and plot the data"
-;;   [& args]
-;;   (println "Hello, World!"))
+  )
+
+(defn -main
+  "Read a CSV, massage the data, interpolate some points, and plot the data"
+  ;; [& args]
+  []
+  ;; Parse program arguments
+
+  ;; Read the CSV. Clean, project, scale, and round the data to within 1 m.
+  (let [imported-meters-data (->> (import-wgs84-data csv-path)
+                                  project-wgs84->meters)
+        {:keys [pwidth pheight]} (get-sketch-dimensions imported-meters-data)
+        scaled-meters-data (->> imported-meters-data
+                                (scale-map-data pwidth pheight)
+                                round-data-points)
+
+        ;; Create a flat, 2D vector with all values initialized to NaN.
+        ;; Then, copy our scaled map data into the vector.
+        data-grid (-> (point-grid-flat pwidth pheight)
+                      (copy-data-to-grid pwidth scaled-meters-data))
+        {:keys [z-min z-max]} (get-altitude-extents data-grid)]
+
+    (swap! global-state assoc
+           :data-grid data-grid
+           :pwidth pwidth
+           :z-min z-min
+           :z-max z-max)
+
+    (q/defsketch grid-thing
+      :size [width height]
+      :settings settings
+      :setup setup
+      :draw draw
+      :features [:keep-on-top])))
+
+(-main)
 
 
