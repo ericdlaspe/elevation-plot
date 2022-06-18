@@ -9,3 +9,27 @@
           dst-grid [0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0 0.0]]
       (is (= (copy-data-to-grid dst-grid 3 src-data)
              [0.0 6.0 0.0 3.0 0.0 0.0 0.0 9.0 0.0])))))
+
+(deftest get-subgrid-test
+  (testing "Example inputs"
+    (is (compare (get-subgrid [0 1 2 3 4 5 6 7 8 9 10 11] 3 0 1)
+                 [##NaN ##NaN ##NaN 0 3 6 1 4 7]))
+    (is (compare (get-subgrid [0 1 2 3 4 5 6 7 8 9] 3 0 0)
+                 [##NaN ##NaN ##NaN ##NaN 0 3 ##NaN 1 4]))))
+
+(deftest counts-equal?-test
+  (testing "Sanity checks"
+    (is (true? (counts-equal? [[1 2 3] [4 5 6]])))
+    (is (false? (counts-equal? [[1 2 3] [4 5]])))))
+
+(deftest count-not-NaN-test
+  (testing "Sanity checks and edge cases"
+    (is (= (count-not-NaN [##NaN ##NaN ##NaN])
+           0))
+    (is (= (count-not-NaN [##NaN 1 ##NaN 2])
+           2))
+    (is (= (count-not-NaN [0])
+           1))
+    (is (= (count-not-NaN [])
+           0))))
+

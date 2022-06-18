@@ -12,10 +12,23 @@
 
 (def csv-path "/Users/easy/Downloads/20220519082008-04213-data.csv")
 
-(def width 500)
+(def width 700)
 (def height width)
 (def pad 10)
-(def global-state (atom {}))
+;;; Use an atom to pass final data from main to draw.
+(def drawing-state (atom {}))
+
+
+(defn isNaN?
+  "Returns true if `x` is ##NaN. Else, false."
+  [x]
+  (Float/isNaN x))
+
+(defn not-NaN
+  "Returns `x` if `x` is not ##NaN, otherwise returns false"
+  [x]
+  (if (Float/isNaN x) false x))
+
 
 ;;; Named colors in HSB( 360 100 100 1.0 )
 (def colors {:black [0 0 0]
@@ -33,6 +46,12 @@
   (if (<= z-min z z-max)
     [(q/map-range z z-min z-max (get-hue :blue) (get-hue :red)) 100 100]  ; z is not nil
     (:black colors)))  ; z is outside the expected data range
+
+(comment
+  (< 0 nil 5)
+  ;; => Execution error (NullPointerException) at elevation-plot.core/eval12443 (form-init1909576536610475304.clj:37).
+  ;;    null
+  )
 
 (defn row-data-good?
   "Returns true if every item in the `row` is a non-empty string;
@@ -123,30 +142,44 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 (defn point-grid-flat
   "Return a flat vector of dimensions `n` by `m` with floats initialized to
-   Float/NaN"
-  [n m]
+   `fill`, or if no fill value is given, Float/NaN.
+
+   Example:
+   ```clojure
+     (point-grid-flat 3 2)
+     ;; => [##NaN ##NaN ##NaN ##NaN ##NaN ##NaN]
+   ```
+   Note that these ##NaN values cannot "
+  ([n m]
+   (point-grid-flat n m Float/NaN))
+  ([n m fill]
   ;; Use vector-of to get unboxed values for space and time efficiency
-  (apply vector-of :float (repeat (* n m) Float/NaN)))
+   (apply vector-of :float (repeat (* n m) fill))))
 
 (comment
-  (count (point-grid-flat 8 8))
-  (Float/NaN)
-  )
+  (point-grid-flat 3 2)
+  ;; => [##NaN ##NaN ##NaN ##NaN ##NaN ##NaN]
+
+  (apply vector-of :float (repeat (* 3 3) nil))
+  ;; => Execution error (NullPointerException) at elevation-plot.core/eval12744 (form-init1909576536610475304.clj:140).
+  ;;    null
+
+)
 
 (defn get-idx-flat
   [n x y]
   (+ x (* n y)))
 
 (defn get-val-flat
-  "For n * m matrix (x, y) -> Return i = x + (n * y)"
+  "For n * m matrix, `grid`. Return grid[i], where i = x + (n * y)"
   [grid n x y]
-  (nth grid (get-idx-flat n x y)))
+  (get grid (get-idx-flat n x y)))
 
 (defn set-val-flat
   "Sets the value `val` at position `x`, `y` in the `n`-by-m matrix `grid`
    implemented as a flat vector"
   [grid n x y val]
-  {:pre [(have? #(< % n) x)]}
+  (have? #(< % n) x)
   (let [idx (have #(< % (count grid)) (get-idx-flat n x y))]
     (assoc grid idx val)))
 
@@ -175,8 +208,7 @@
 
     (copy-data-to-grid dst-grid 3 src-data))
 
-  (empty? (rest [[0 1 2]]))
-  )
+  (empty? (rest [[0 1 2]])))
 
 (defn draw-grid-flat
   "Draw the n-by-m `grid` using Quil library functions. m does not need to be
@@ -186,13 +218,11 @@
   (q/stroke-weight 4)
   (doseq [x (range n)
           y (range (/ (count grid) n))
-          :let [v (get-val-flat grid n x y)
+          :let [v (have number? (get-val-flat grid n x y))
                 color (z-height->hue-rainbow v z-min z-max)]]
     (apply q/stroke color)
     (when-not (= color (:black colors))
       (q/point x y))))
-
-
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -293,6 +323,7 @@
   "Run a rounding function on each row of the 2D list supplied in `coll`"
   [coll] (mapv round-row coll))
 
+
 ;; (defn interpolate-distance)
 
 ;; (defn get-nearest-points-grid)
@@ -357,7 +388,7 @@
   "Return the minimum and maximum altitude in the vector, which may contain 
    ##NaN values."
   [coll]
-  (let [data (filter #(not (Float/isNaN %)) coll)]
+  (let [data (filter #(not (isNaN? %)) coll)]
     {:z-min (apply min data)
      :z-max (apply max data)}))
 
@@ -374,6 +405,186 @@
        drop-header-row
        csv-strings->numbers))
 
+(defn in-grid?
+  "Is the point described by `x` and `y` inside an n-by-m grid?"
+  [n m x y]
+  (and (<= 0 x (dec n))
+       (<= 0 y (dec m))))
+
+(comment
+  (let [[n m x y] [3 4 1 1]]
+    (>= 0 x (dec n))
+    (>= 0 y (dec m)))
+  
+  (>= 0 0 (dec 3))
+  (>= 0 1)
+  )
+
+(defn get-altitude
+  [grid n m x y]
+  (or (and
+       ;; false if outside n-by-m grid
+       (in-grid? n m x y)
+       ;; nil if index does not exist
+       (get-val-flat grid n x y))
+      Float/NaN))
+
+(defn idx->xy
+  [i n]
+  (have? pos? n)
+  [(mod i n) (quot i n)])
+
+
+(defn get-subgrid
+  "Return the 3-by-3 subgrid of altitudes centered on index `i`. Fills in ##NaN
+   at points where the subgrid overlaps with the edges."
+  ([grid n i]
+   (apply get-subgrid grid n (idx->xy i n)))
+
+  ([grid n x y]
+   (have? pos? n)
+   (let [m (/ (count grid) n)]
+
+     (vec (for [ax [(dec x) x (inc x)]
+                ay [(dec y) y (inc y)]]
+            (get-altitude grid n m ax ay))))))
+
+(comment
+  (let [x 5 y 2 n 8]
+    (for [x [(dec x) x (inc x)]
+          y [(dec y) y (inc y)]]
+      (get-idx-flat n x y)))
+  ;; => (12 20 28 13 21 29 14 22 30)
+
+  (get-subgrid [0 1 2 3 4 5 6 7 8 9 10 11] 3 0 1)
+  ;; => [##NaN ##NaN ##NaN 0 3 6 1 4 7]
+
+  (get-subgrid [0 1 2 3 4 5 6 7 8 9] 3 0 0)
+  ;; => [##NaN ##NaN ##NaN ##NaN 0 3 ##NaN 1 4]
+  )
+
+(def counts (partial map count))
+
+(defn counts-equal?
+  "Return true if the number of items in all collections inside `coll` is the
+   same. Otherwise, false."
+  [coll]
+  (apply = (counts coll)))
+
+(defn weighted-mean
+  "Return the weighted mean of `terms` weighted by `weights`.
+   Weights should have a 1:1 correspondence with terms (i.e., the sequences must
+   be the same length). The `weights` need not add up to 1."
+  [terms weights]
+  ;; Some assertions
+  (have? not-empty terms)
+  (have? counts-equal? [terms weights])
+  (let [sum-weights (reduce + weights)
+        sum-weighted-terms (reduce + (map * weights terms))]
+    (have? pos? sum-weights)
+    (/ sum-weighted-terms sum-weights)))
+
+(comment
+  (do
+    (point-grid-flat 3 3)
+    (have pos? 0)
+    (println "foo"))
+
+  (= (count []) (count (not-empty [])))
+  (counted? [1 2 3])
+  
+  (map count [[1 2 3] [4 5] [0 0 0 0 0]])
+  (fn [coll] (map count coll) [[1 2 3] [4 5]])
+  (apply = [1 1 1])
+
+  (counts-equal? [[1 2 3] [4 5 4]])
+  (counts-equal? [[1 2 3] [4 5]])
+
+  (apply = (counts [[1 2 3] [4 5 4]]))
+  )
+
+(defn count-not-NaN
+  [coll]
+  (count (filter not-NaN coll)))
+
+(defn interpolate-subgrid-val
+  "From the 3-by-3 flat vector `subgrid` interpolate the value at the center.
+   If the value is already not ##NaN, return it as-is."
+  [subgrid]
+  (let [center (nth subgrid 4)]
+    ;; Return the value at the center of the subgrid if it already has a value
+    ;; or if we don't have enough surrounding values from which to interpolate.
+    (if (or (not-NaN center)
+            (> 3 (count-not-NaN subgrid)))
+      center
+
+    ;; Compute a weighted mean of the 8 values surrounding the center.
+      (let [corners  (->> subgrid
+                        ;; The center has an even index as well, but it will
+                        ;; always be filtered out becuase it is ##NaN.
+                          (keep-indexed (fn [idx val] (when (even? idx) val)))
+                          (filter not-NaN))
+            laterals (->> subgrid
+                          (keep-indexed (fn [idx val] (when (odd? idx) val)))
+                          (filter not-NaN))
+        ;; Map the weights of corner values in proportion with their distance
+        ;; compared to the lateral values.
+        ;; 0.70711356 is approximately the inverse of the length of the
+        ;; hypotenuse of a unit right triangle.
+            corner-weights  (map (constantly 0.70711356) corners)
+            lateral-weights (map (constantly 1.0) laterals)
+
+            values (concat corners laterals)
+            weights (concat corner-weights lateral-weights)]
+        (weighted-mean values weights)))))
+
+
+(comment
+  (keep-indexed (fn [idx val] (when (even? idx) val)) [10 20 30 40 50 60 70])
+  ;; => (10 30 50 70)
+
+  (/ 1 1.4142)
+  ;; => 0.7071135624381276
+
+  (map (constantly 1) [0 1 2 3])
+  ;; => (1 1 1 1)
+
+  (float 0.7071135624381276)
+
+  (when 5.7 (println "true"))
+
+  (macroexpand (when (or (not-NaN ##NaN)
+                         (> 3 (count-not-NaN [1 2 3 4 5 6 7 8])))
+                 4))
+  )
+
+
+(defn interpolate-linear-8-way
+  "Interpolate each value in a flat 2D vector, based on at least 3 and up to
+   8 adjacent values. Missing values (represented by ##NaN) are ignored."
+  [grid n]
+  (have? pos? n)
+  (let [size (count grid)]
+    (loop [idx 0
+           work-grid grid]
+
+      ;; When there are no ##NaN left in the grid, return it as complete.
+      (when (not-any? isNaN? work-grid)
+        work-grid)
+
+      (if (>= idx size)
+        ;; When we reach the last element in the grid, reset the index to 0
+        ;; and interpolate over the whole grid again.
+        (recur 0 work-grid)
+
+        ;; This is where we do the work of interpolating each point that doesn't
+        ;; already have a value.
+        (if (isNaN? (nth work-grid idx))
+          (let [val (interpolate-subgrid-val (get-subgrid work-grid n idx))]
+            (recur (inc idx) (assoc work-grid idx val)))
+
+          ;; The grid point at idx already has a value. Move along...
+          (recur (inc idx) work-grid))))))
 
 
 (defn setup []
@@ -387,7 +598,7 @@
   (apply q/background (:black colors))
 
   (let [{data-grid :data-grid, n-dim :pwidth,
-         z-min :z-min, z-max :z-max} @global-state]
+         z-min :z-min, z-max :z-max} @drawing-state]
     (q/translate pad pad)
     (draw-grid-flat data-grid n-dim z-min z-max))
 
@@ -405,10 +616,6 @@
                                  (scale-map-data pwidth pheight)
                                  round-data-points))
     (count scaled-meters-data)
-    (get-min ALL-X scaled-meters-data)
-    (get-max ALL-X scaled-meters-data)
-    (get-min ALL-Y scaled-meters-data)
-    (get-max ALL-Y scaled-meters-data)
 
     (def grid (point-grid-flat pwidth pheight))
     (count grid)
@@ -416,9 +623,8 @@
     (filter #(not (Float/isNaN %)) data-grid)
     (def extents (get-altitude-extents data-grid)))
 
-  extents
+  extents)
 
-  )
 
 (defn -main
   "Read a CSV, massage the data, interpolate some points, and plot the data"
@@ -437,14 +643,15 @@
         ;; Create a flat, 2D vector with all values initialized to NaN.
         ;; Then, copy our scaled map data into the vector.
         data-grid (-> (point-grid-flat pwidth pheight)
-                      (copy-data-to-grid pwidth scaled-meters-data))
+                      (copy-data-to-grid pwidth scaled-meters-data)
+                      #_(interpolate-linear-8-way pwidth))
+
         {:keys [z-min z-max]} (get-altitude-extents data-grid)]
 
-    (swap! global-state assoc
-           :data-grid data-grid
-           :pwidth pwidth
-           :z-min z-min
-           :z-max z-max)
+    (reset! drawing-state {:data-grid data-grid
+                           :pwidth pwidth
+                           :z-min z-min
+                           :z-max z-max})
 
     (q/defsketch grid-thing
       :size [width height]
