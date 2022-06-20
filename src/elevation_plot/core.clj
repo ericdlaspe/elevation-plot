@@ -15,6 +15,7 @@
 (def width 700)
 (def height width)
 (def pad 10)
+(def point-size 1)
 ;;; Use an atom to pass final data from main to draw.
 (def drawing-state (atom {}))
 
@@ -215,10 +216,10 @@
    supplied. It is implied to be the vector's size divided by `n`."
   [grid n z-min z-max]
   (have? pos? n)
-  (q/stroke-weight 4)
+  (q/stroke-weight point-size)
   (doseq [x (range n)
           y (range (/ (count grid) n))
-          :let [v (have number? (get-val-flat grid n x y))
+          :let [v (get-val-flat grid n x y)
                 color (z-height->hue-rainbow v z-min z-max)]]
     (apply q/stroke color)
     (when-not (= color (:black colors))
@@ -510,8 +511,9 @@
 (defn interpolate-subgrid-val
   "From the 3-by-3 flat vector `subgrid` interpolate the value at the center.
    If the value is already not ##NaN, return it as-is."
-  [subgrid]
-  (let [center (nth subgrid 4)]
+  [grid n i]
+  (let [subgrid (get-subgrid grid n i)
+        center (nth subgrid 4)]
     ;; Return the value at the center of the subgrid if it already has a value
     ;; or if we don't have enough surrounding values from which to interpolate.
     (if (or (not-NaN center)
@@ -573,18 +575,41 @@
         work-grid)
 
       (if (>= idx size)
+        work-grid ; Return after one iteration for now.
         ;; When we reach the last element in the grid, reset the index to 0
         ;; and interpolate over the whole grid again.
-        (recur 0 work-grid)
+        ;; (recur 0 (inc iter) work-grid)
 
         ;; This is where we do the work of interpolating each point that doesn't
         ;; already have a value.
         (if (isNaN? (nth work-grid idx))
-          (let [val (interpolate-subgrid-val (get-subgrid work-grid n idx))]
+          (let [val (interpolate-subgrid-val work-grid n idx)]
             (recur (inc idx) (assoc work-grid idx val)))
 
           ;; The grid point at idx already has a value. Move along...
           (recur (inc idx) work-grid))))))
+
+(defn interpolate-linear-8-way-iter
+  "Interpolate each value in a flat 2D vector, based on at least 3 and up to
+   8 adjacent values. Missing values (represented by ##NaN) are ignored."
+  [grid n]
+  (let [size (count grid)]
+    (into [] (pmap #(interpolate-subgrid-val grid n %) (range size)))))
+
+(comment
+
+  (def my-xf (comp (map inc) (take 3)))
+
+  (let [grid [0 1 2 3 ##NaN 5 6 7 8]
+        n 3]
+
+    (interpolate-subgrid-val [##NaN 1 2 3 4 5 6 7 8] 3 0)
+  ;; => 2.5224114499282404
+
+    (interpolate-subgrid-val [0 1 ##NaN 3 4 ##NaN 6 7 ##NaN] 3 5))
+  ;; => 4.0
+
+  (int 5.9))
 
 
 (defn setup []
@@ -642,9 +667,13 @@
 
         ;; Create a flat, 2D vector with all values initialized to NaN.
         ;; Then, copy our scaled map data into the vector.
-        data-grid (-> (point-grid-flat pwidth pheight)
-                      (copy-data-to-grid pwidth scaled-meters-data)
-                      #_(interpolate-linear-8-way pwidth))
+        inter-grid (-> (point-grid-flat pwidth pheight)
+                       (copy-data-to-grid pwidth scaled-meters-data)
+                       #_(interpolate-linear-8-way-iter pwidth))
+        data-grid (time (nth (iterate
+                              #(interpolate-linear-8-way-iter % pwidth)
+                              inter-grid)
+                             400))
 
         {:keys [z-min z-max]} (get-altitude-extents data-grid)]
 
