@@ -41,7 +41,7 @@
     ;; ##NaN   3     4     5   ##NaN
     ;; ##NaN   6     7     8   ##NaN
     ;; ##NaN ##NaN ##NaN ##NaN ##NaN
-    (is (= (interpolate-subgrid-val [##NaN 1 2 3 0 5 6 7 8] 3 0)
+    (is (= (interpolate-subgrid-val [##NaN 1 2 3 4 5 6 7 8] 3 0)
            ;; Contributing indices are 1 3 4, with 4 having lower weight
            2.5224114499282404))
     (is (= (interpolate-subgrid-val [0 1 2 3 ##NaN 5 6 7 8] 3 4)

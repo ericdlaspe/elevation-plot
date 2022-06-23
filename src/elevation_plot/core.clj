@@ -7,15 +7,17 @@
    [clojure.math.numeric-tower :as m]
    [clojure.tools.trace :as tr]
    [com.rpl.specter :as sp]
-   [quil.core :as q]
-   ))
+   [quil.core :as q]))
 
 (def csv-path "/Users/easy/Downloads/20220519082008-04213-data.csv")
+(def csv-out-path "/Users/easy/Downloads/out.csv")
 
-(def width 700)
+(def width 800)
 (def height width)
 (def pad 10)
-(def point-size 1)
+(def point-size 2)
+(def interp-iterations (max width height))
+
 ;;; Use an atom to pass final data from main to draw.
 (def drawing-state (atom {}))
 
@@ -34,11 +36,37 @@
 ;;; Named colors in HSB( 360 100 100 1.0 )
 (def colors {:black [0 0 0]
              :red [0 100 100]
-             :blue [240 100 100]})
+             :blue [240 100 100]
+             :dark-blue [240 100 10]
+             :white-green [120 0 100]
+             :light-green [120 20 100]
+             :white [0 0 100]})
 
 (defn get-hue
   [color]
   (first (color colors)))
+
+(defn pow
+ [x pow]
+  (reduce * (repeat pow x)))
+
+(comment
+  (every? #(<= 0 % 1) (repeatedly 1000 rand))
+  ;; => true
+
+  (every? #(<= 0 % 1) (map #(* % %) (repeatedly 1000 rand)))
+
+  (pow 2 8)
+  )
+
+(defn z-height->color
+  [z z-min z-max color-min color-max]
+  (if (<= z-min z z-max)
+    (mapv #(q/map-range z z-min z-max %1 %2) color-min color-max)
+    (:black colors)))
+
+(comment
+  (mapv #(q/map-range 0.5 0 1 %1 %2) [0 2 10] [360 4 20]))
 
 (defn z-height->hue-rainbow
   "Return a color from the rainbow color scheme, based on z-height relative to
@@ -80,6 +108,30 @@
   [csv-path]
   (with-open [reader (io/reader csv-path)]
     (doall (csv/read-csv reader))))
+
+(defn try-load-csv
+  [csv-path]
+  (try (load-csv csv-path)
+       (catch Exception _
+         nil)))
+
+(comment
+  (try (/ 1 2)
+       (catch Exception _ nil))
+  ;; => 1/2
+
+  (try (/ 1 0)
+       (catch Exception _ nil))
+  ;; => nil
+
+  )
+
+(defn write-csv
+  "Writes `data` to a file at `csv-path`, using default settings, where `data`
+   is a vector of row vectors (e.g., `[[\"x\" \"y\"] [1 2]]`)"
+  [data csv-path]
+  (with-open [writer (io/writer csv-path)]
+    (csv/write-csv writer data)))
 
 (defn strings->doubles
   [row]
@@ -163,9 +215,8 @@
 
   (apply vector-of :float (repeat (* 3 3) nil))
   ;; => Execution error (NullPointerException) at elevation-plot.core/eval12744 (form-init1909576536610475304.clj:140).
-  ;;    null
-
-)
+  ;;    null)
+  )
 
 (defn get-idx-flat
   [n x y]
@@ -220,7 +271,12 @@
   (doseq [x (range n)
           y (range (/ (count grid) n))
           :let [v (get-val-flat grid n x y)
-                color (z-height->hue-rainbow v z-min z-max)]]
+                ;; color (z-height->color v z-min z-max
+                ;;                        (:dark-blue colors) (:white colors))
+                color (z-height->color
+                       (pow (q/norm v z-min z-max) 2)
+                       0 1
+                       (:dark-blue colors) (:light-green colors))]]
     (apply q/stroke color)
     (when-not (= color (:black colors))
       (q/point x y))))
@@ -416,10 +472,9 @@
   (let [[n m x y] [3 4 1 1]]
     (>= 0 x (dec n))
     (>= 0 y (dec m)))
-  
+
   (>= 0 0 (dec 3))
-  (>= 0 1)
-  )
+  (>= 0 1))
 
 (defn get-altitude
   [grid n m x y]
@@ -493,7 +548,7 @@
 
   (= (count []) (count (not-empty [])))
   (counted? [1 2 3])
-  
+
   (map count [[1 2 3] [4 5] [0 0 0 0 0]])
   (fn [coll] (map count coll) [[1 2 3] [4 5]])
   (apply = [1 1 1])
@@ -501,8 +556,7 @@
   (counts-equal? [[1 2 3] [4 5 4]])
   (counts-equal? [[1 2 3] [4 5]])
 
-  (apply = (counts [[1 2 3] [4 5 4]]))
-  )
+  (apply = (counts [[1 2 3] [4 5 4]])))
 
 (defn count-not-NaN
   [coll]
@@ -557,8 +611,7 @@
 
   (macroexpand (when (or (not-NaN ##NaN)
                          (> 3 (count-not-NaN [1 2 3 4 5 6 7 8])))
-                 4))
-  )
+                 4)))
 
 
 (defn interpolate-linear-8-way
@@ -589,12 +642,31 @@
           ;; The grid point at idx already has a value. Move along...
           (recur (inc idx) work-grid))))))
 
+
+(defn chunked-pmap [f partition-size coll]
+  "Copied from StackOverflow (https://stackoverflow.com/a/19972453)"
+  (->> coll                           ; Start with original collection.
+
+       (partition-all partition-size) ; Partition it into chunks.
+
+       (pmap (comp doall              ; Map f over each chunk,
+                   (partial map f)))  ; and use doall to force it to be
+                                      ; realized in the worker thread.
+
+       (apply concat)))               ; Concatenate the chunked results
+                                      ; to form the return value.
+
 (defn interpolate-linear-8-way-iter
   "Interpolate each value in a flat 2D vector, based on at least 3 and up to
    8 adjacent values. Missing values (represented by ##NaN) are ignored."
   [grid n]
   (let [size (count grid)]
-    (into [] (pmap #(interpolate-subgrid-val grid n %) (range size)))))
+    (if (every? pos? grid)
+      grid
+      (vec (chunked-pmap
+            #(interpolate-subgrid-val grid n %)
+            128
+            (range size))))))
 
 (comment
 
@@ -650,6 +722,9 @@
 
   extents)
 
+(comment
+  (def lines (slurp csv-out-path)))
+
 
 (defn -main
   "Read a CSV, massage the data, interpolate some points, and plot the data"
@@ -668,12 +743,11 @@
         ;; Create a flat, 2D vector with all values initialized to NaN.
         ;; Then, copy our scaled map data into the vector.
         inter-grid (-> (point-grid-flat pwidth pheight)
-                       (copy-data-to-grid pwidth scaled-meters-data)
-                       #_(interpolate-linear-8-way-iter pwidth))
+                       (copy-data-to-grid pwidth scaled-meters-data))
         data-grid (time (nth (iterate
                               #(interpolate-linear-8-way-iter % pwidth)
                               inter-grid)
-                             400))
+                             interp-iterations))
 
         {:keys [z-min z-max]} (get-altitude-extents data-grid)]
 
@@ -687,8 +761,5 @@
       :settings settings
       :setup setup
       :draw draw
-      :features [:keep-on-top])))
-
-(-main)
-
-
+      :features [:keep-on-top])
+    ))
